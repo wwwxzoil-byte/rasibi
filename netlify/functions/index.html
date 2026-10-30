@@ -1,0 +1,436 @@
+ <!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="CIS Rasibi: ترجمة محاضرات PDF والصور من الإنجليزي إلى العربي، وتحويل الصور إلى PDF">
+  <title>CIS Rasibi - أدوات الطالب الذكية</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&display=swap" rel="stylesheet">
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.1/tesseract.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: #0b0f19;
+      color: #e5e7eb;
+      margin: 0;
+      padding: 16px;
+      min-height: 100vh;
+    }
+    header { text-align: center; margin: 12px 0 24px; }
+    header h1 { font-size: 22px; color: #c4b5fd; margin: 0 0 6px; }
+    header p { color: #9ca3af; font-size: 13px; margin: 0; }
+    .card {
+      max-width: 640px;
+      margin: 0 auto 20px;
+      background: #111827;
+      border: 1px solid #374151;
+      border-radius: 16px;
+      padding: 20px;
+    }
+    h2 { font-size: 17px; color: #c4b5fd; margin: 0 0 6px; }
+    .sub { color: #9ca3af; font-size: 13px; margin: 0 0 14px; line-height: 1.7; }
+    input[type=file] {
+      width: 100%;
+      margin: 6px 0;
+      color: #d1d5db;
+      font-size: 13px;
+    }
+    button {
+      width: 100%;
+      padding: 12px;
+      margin-top: 10px;
+      border: 0;
+      border-radius: 12px;
+      background: #6d28d9;
+      color: #fff;
+      font-weight: 700;
+      font-size: 15px;
+      cursor: pointer;
+    }
+    button:hover:not(:disabled) { background: #7c3aed; }
+    button:disabled { opacity: .5; cursor: wait; }
+    .status {
+      margin-top: 12px;
+      padding: 12px;
+      border-radius: 12px;
+      background: #0b0f19;
+      border: 1px solid #374151;
+      font-size: 14px;
+      min-height: 22px;
+      white-space: pre-wrap;
+      line-height: 1.6;
+    }
+    .status.ok { border-color: #15803d; color: #86efac; }
+    .status.err { border-color: #b91c1c; color: #fca5a5; }
+    footer { text-align: center; color: #6b7280; font-size: 12px; margin-top: 30px; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>CIS Rasibi</h1>
+    <p>أدوات الطالب الجامعي</p>
+  </header>
+
+  <!-- ============ أداة الترجمة ============ -->
+  <section class="card">
+    <h2>مترجم المحاضرات</h2>
+    <p class="sub">
+      يترجم كل سطر إنجليزي ويكتب الترجمة العربية تحته بلون أزرق.<br>
+      ملف PDF يرجع PDF مترجم، والصورة ترجع صورة مترجمة.<br>
+      الحد الأقصى للملف: 20 ميغابايت.
+    </p>
+    <input type="file" id="fileT" accept="application/pdf,image/png,image/jpeg,image/webp">
+    <button id="btnT">ترجمة المحاضرة</button>
+    <div id="statusT" class="status">جاهز. اختر ملف PDF أو صورة.</div>
+  </section>
+
+  <!-- ============ تحويل الصور إلى PDF ============ -->
+  <section class="card">
+    <h2>تحويل الصور إلى PDF</h2>
+    <p class="sub">اختر صورة أو أكثر، وكل صورة تصير صفحة في ملف PDF واحد.</p>
+    <input type="file" id="fileI" accept="image/png,image/jpeg,image/webp" multiple>
+    <button id="btnI">إنشاء PDF</button>
+    <div id="statusI" class="status">جاهز.</div>
+  </section>
+
+  <footer>© 2026 CIS Rasibi</footer>
+
+<script>
+  // ---------- إعدادات عامة ----------
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+  const { jsPDF } = window.jspdf;
+  const $ = (id) => document.getElementById(id);
+  const MAX_BYTES = 20 * 1024 * 1024;
+  const CHUNK = 50;            // عدد الأسطر في كل طلب ترجمة
+  const PAGE_W = 1240, PAGE_H = 1754, MARGIN = 80;
+
+  // ---------- أدوات مساعدة ----------
+  function setStatus(el, msg, type = "") {
+    el.textContent = msg;   // textContent وليس innerHTML لحماية الصفحة
+    el.className = "status " + type;
+  }
+
+  function download(blob, name) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+
+  function loadImage(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("تعذر فتح الصورة")); };
+      img.src = url;
+    });
+  }
+
+  function imageToCanvas(img) {
+    const c = document.createElement("canvas");
+    c.width = img.naturalWidth;
+    c.height = img.naturalHeight;
+    c.getContext("2d").drawImage(img, 0, 0);
+    return c;
+  }
+
+  function checkSize(file) {
+    if (file.size > MAX_BYTES) throw new Error("الملف أكبر من 20 ميغابايت");
+  }
+
+  // ---------- استخراج النص من PDF ----------
+  // تجميع العناصر النصية في أسطر حسب الإحداثي Y
+  function groupTextItems(items) {
+    const list = items.filter((it) => it.str && it.str.trim());
+    list.sort((a, b) => (b.transform[5] - a.transform[5]) || (a.transform[4] - b.transform[4]));
+
+    const lines = [];
+    let current = null;
+    let currentY = null;
+    for (const it of list) {
+      const y = it.transform[5];
+      if (current && Math.abs(y - currentY) < 3) {
+        current.push(it.str);
+      } else {
+        if (current) lines.push(current.join(" "));
+        current = [it.str];
+        currentY = y;
+      }
+    }
+    if (current) lines.push(current.join(" "));
+    return lines.map((l) => l.replace(/\s+/g, " ").trim()).filter(Boolean);
+  }
+
+  // OCR لسطر-سطر، مع إحداثيات كل سطر (تُستعمل في الصور)
+  async function ocrLines(worker, source) {
+    const { data } = await worker.recognize(source, {}, { blocks: true });
+    const out = [];
+    for (const b of data.blocks || [])
+      for (const p of b.paragraphs || [])
+        for (const l of p.lines || []) {
+          const text = (l.text || "").replace(/\s+/g, " ").trim();
+          if (text) out.push({ text, bbox: l.bbox });
+        }
+    return out;
+  }
+
+  // يرجع مصفوفة صفحات، كل صفحة مصفوفة أسطر إنجليزية
+  async function extractPages(pdf, onProgress) {
+    const pages = [];
+    let worker = null;
+    try {
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        let lines = groupTextItems(content.items);
+
+        // إذا الصفحة فارغة من النص تعتبر ممسوحة: نحولها صورة ونقرأها بـ OCR
+        if (lines.join("").length < 20) {
+          if (!worker) worker = await Tesseract.createWorker("eng");
+          const vp = page.getViewport({ scale: 2 });
+          const canvas = document.createElement("canvas");
+          canvas.width = vp.width;
+          canvas.height = vp.height;
+          await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
+          lines = (await ocrLines(worker, canvas)).map((l) => l.text);
+        }
+
+        pages.push(lines);
+        onProgress(i, pdf.numPages);
+      }
+    } finally {
+      if (worker) await worker.terminate();
+    }
+    return pages;
+  }
+
+  // ---------- الترجمة عبر Netlify Function ----------
+  async function translateLines(lines, onProgress) {
+    const out = [];
+    for (let i = 0; i < lines.length; i += CHUNK) {
+      const chunk = lines.slice(i, i + CHUNK);
+      const res = await fetch("/.netlify/functions/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lines: chunk }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "فشلت الترجمة");
+      out.push(...data.translations);
+      onProgress(Math.min(i + CHUNK, lines.length), lines.length);
+    }
+    return out;
+  }
+
+  // ---------- بناء PDF مترجم ----------
+  async function buildTranslatedPdf(pages, translations, fileName) {
+    await document.fonts.load("30px Amiri");
+    await document.fonts.load("bold 28px Amiri");
+
+    const pdfDoc = new jsPDF({ unit: "px", format: [PAGE_W, PAGE_H], orientation: "portrait" });
+    const canvas = document.createElement("canvas");
+    canvas.width = PAGE_W;
+    canvas.height = PAGE_H;
+    const ctx = canvas.getContext("2d");
+
+    let y = MARGIN;
+    let pageCount = 0;
+
+    function startFreshPage() {
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, PAGE_W, PAGE_H);
+      y = MARGIN;
+    }
+
+    function commitPage() {
+      if (pageCount > 0) pdfDoc.addPage([PAGE_W, PAGE_H]);
+      pdfDoc.addImage(canvas.toDataURL("image/jpeg", 0.9), "JPEG", 0, 0, PAGE_W, PAGE_H);
+      pageCount++;
+    }
+
+    function drawWrapped(text, font, color, rtl, lineH) {
+      ctx.font = font;
+      ctx.fillStyle = color;
+      ctx.direction = rtl ? "rtl" : "ltr";
+      ctx.textAlign = rtl ? "right" : "left";
+
+      const maxW = PAGE_W - 2 * MARGIN;
+      const rows = [];
+      let cur = "";
+      for (const word of text.split(" ")) {
+        const test = cur ? cur + " " + word : word;
+        if (ctx.measureText(test).width > maxW && cur) {
+          rows.push(cur);
+          cur = word;
+        } else {
+          cur = test;
+        }
+      }
+      if (cur) rows.push(cur);
+
+      for (const row of rows) {
+        if (y + lineH > PAGE_H - MARGIN) {
+          commitPage();
+          startFreshPage();
+        }
+        const x = rtl ? PAGE_W - MARGIN : MARGIN;
+        ctx.fillText(row, x, y + lineH * 0.8);
+        y += lineH;
+      }
+    }
+
+    startFreshPage();
+    let idx = 0;
+    for (let p = 0; p < pages.length; p++) {
+      drawWrapped(`صفحة ${p + 1}`, "bold 28px Amiri, serif", "#6b7280", true, 44);
+      for (const en of pages[p]) {
+        drawWrapped(en, "24px Arial, sans-serif", "#111827", false, 34);
+        drawWrapped(translations[idx++], "30px Amiri, serif", "#1d4ed8", true, 46);
+        y += 14;
+      }
+      y += 30;
+    }
+    commitPage();
+
+    pdfDoc.save("translated_" + fileName.replace(/\.pdf$/i, "") + ".pdf");
+  }
+
+  // ---------- ترجمة صورة: ترجع صورة ----------
+  async function translateImage(file, statusEl) {
+    const img = await loadImage(file);
+    const canvas = imageToCanvas(img);
+    const ctx = canvas.getContext("2d");
+
+    setStatus(statusEl, "جاري التعرف على النص في الصورة...");
+    const worker = await Tesseract.createWorker("eng");
+    let lines;
+    try {
+      lines = await ocrLines(worker, canvas);
+    } finally {
+      await worker.terminate();
+    }
+    if (!lines.length) throw new Error("ما لقيت نص في الصورة");
+
+    const translations = await translateLines(lines.map((l) => l.text), (d, t) =>
+      setStatus(statusEl, `جاري الترجمة ${d} من ${t} سطر...`)
+    );
+
+    await document.fonts.load("30px Amiri");
+    lines.forEach((l, i) => {
+      const { x0, y0, x1, y1 } = l.bbox;
+      const w = x1 - x0, h = y1 - y0, pad = 2;
+
+      // تغطية النص الأصلي ثم كتابة الترجمة مكانه
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(x0 - pad, y0 - pad, w + 2 * pad, h + 2 * pad);
+
+      ctx.direction = "rtl";
+      ctx.textAlign = "right";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = "#1d4ed8";
+
+      let size = Math.max(10, Math.floor(h * 0.9));
+      ctx.font = `${size}px Amiri, serif`;
+      while (ctx.measureText(translations[i]).width > w && size > 8) {
+        size--;
+        ctx.font = `${size}px Amiri, serif`;
+      }
+      ctx.fillText(translations[i], x1, (y0 + y1) / 2);
+    });
+
+    const mime = file.type === "image/png" ? "image/png" : "image/jpeg";
+    const blob = await new Promise((res) => canvas.toBlob(res, mime, 0.92));
+    download(blob, "translated_" + file.name);
+  }
+
+  // ---------- زر الترجمة ----------
+  $("btnT").addEventListener("click", async () => {
+    const st = $("statusT");
+    const file = $("fileT").files[0];
+    if (!file) return setStatus(st, "⚠️ اختر ملفاً أولاً", "err");
+
+    $("btnT").disabled = true;
+    try {
+      checkSize(file);
+
+      if (file.type === "application/pdf") {
+        setStatus(st, "جاري قراءة الملف...");
+        const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+        const pages = await extractPages(pdf, (i, n) => setStatus(st, `قراءة الصفحة ${i} من ${n}...`));
+
+        const flat = pages.flat();
+        if (!flat.length) throw new Error("ما لقيت نص في الملف");
+
+        const translations = await translateLines(flat, (d, t) =>
+          setStatus(st, `جاري الترجمة ${d} من ${t} سطر...`)
+        );
+
+        setStatus(st, "جاري بناء ملف PDF...");
+        await buildTranslatedPdf(pages, translations, file.name);
+        setStatus(st, "✅ تمت الترجمة وتحميل الملف.", "ok");
+      } else if (file.type.startsWith("image/")) {
+        await translateImage(file, st);
+        setStatus(st, "✅ تمت الترجمة وتحميل الصورة.", "ok");
+      } else {
+        throw new Error("نوع الملف غير مدعوم");
+      }
+    } catch (e) {
+      console.error(e);
+      setStatus(st, "❌ " + e.message, "err");
+    } finally {
+      $("btnT").disabled = false;
+    }
+  });
+
+  // ---------- زر تحويل الصور إلى PDF ----------
+  $("btnI").addEventListener("click", async () => {
+    const st = $("statusI");
+    const files = [...$("fileI").files];
+    if (!files.length) return setStatus(st, "⚠️ اختر صوراً أولاً", "err");
+
+    $("btnI").disabled = true;
+    try {
+      const doc = new jsPDF({ unit: "mm", format: "a4" });
+      const W = 210, H = 297, M = 10;
+
+      for (let i = 0; i < files.length; i++) {
+        setStatus(st, `معالجة الصورة ${i + 1} من ${files.length}...`);
+        checkSize(files[i]);
+        const canvas = imageToCanvas(await loadImage(files[i]));
+
+        const r = Math.min((W - 2 * M) / canvas.width, (H - 2 * M) / canvas.height);
+        const w = canvas.width * r, h = canvas.height * r;
+
+        if (i > 0) doc.addPage();
+        doc.addImage(canvas.toDataURL("image/jpeg", 0.92), "JPEG", (W - w) / 2, (H - h) / 2, w, h);
+      }
+
+      doc.save("CIS_Rasibi_Images.pdf");
+      setStatus(st, "✅ تم إنشاء الملف.", "ok");
+    } catch (e) {
+      console.error(e);
+      setStatus(st, "❌ " + e.message, "err");
+    } finally {
+      $("btnI").disabled = false;
+    }
+  });
+</script>
+</body>
+</html>
